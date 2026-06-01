@@ -1,0 +1,120 @@
+﻿name: DevSecOps Pipeline — OWASP Juice Shop
+
+on:
+  push:
+    branches: ["master"]
+  pull_request:
+    branches: ["master"]
+  workflow_dispatch:
+
+jobs:
+  devsecops:
+    name: Security Pipeline
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      issues: write
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: "TruffleHog — Secret Scanning"
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: master
+          head: HEAD
+          extra_args: --only-verified
+        continue-on-error: true
+
+      - name: "Semgrep — SAST analiza"
+        run: |
+          pip install semgrep
+          semgrep --config=p/owasp-top-ten \
+                  --config=p/nodejs \
+                  --config=p/javascript \
+                  --json --output semgrep-report.json . || true
+        continue-on-error: true
+
+      - name: Upload Semgrep rezultati
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: semgrep-report
+          path: semgrep-report.json
+
+      - name: "OWASP Dependency-Check — SCA"
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: "juice-shop"
+          path: "."
+          format: "HTML,JSON"
+          args: >
+            --failOnCVSS 7
+            --enableRetired
+        continue-on-error: true
+
+      - name: Upload Dependency-Check rezultati
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-check-report
+          path: reports/
+
+      - name: "Docker — build image"
+        run: |
+          docker build -t juice-shop:latest .
+
+      - name: "Trivy — skeniranje Docker image-a"
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "juice-shop:latest"
+          format: "table"
+          exit-code: "0"
+          severity: "HIGH,CRITICAL"
+          output: trivy-report.txt
+        continue-on-error: true
+
+      - name: Upload Trivy rezultati
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-report
+          path: trivy-report.txt
+
+      - name: "Pokreni Juice Shop kontejner"
+        run: |
+          docker run -d \
+            --name juice-shop \
+            -p 3000:3000 \
+            juice-shop:latest
+          echo "Cekam da aplikacija bude dostupna..."
+          sleep 20
+          curl --retry 10 --retry-delay 3 --retry-connrefused \
+            http://localhost:3000 -o /dev/null -s -w "HTTP status: %{http_code}\n"
+
+      - name: "OWASP ZAP — DAST Baseline Scan"
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: "http://localhost:3000"
+          rules_file_name: ".zap/rules.tsv"
+          cmd_options: "-I"
+          allow_issue_writing: false
+        continue-on-error: true
+
+      - name: Upload ZAP rezultati
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zap-report
+          path: |
+            report_html.html
+            report_json.json
+
+      - name: Zaustavi kontejner
+        if: always()
+        run: docker stop juice-shop && docker rm juice-shop
