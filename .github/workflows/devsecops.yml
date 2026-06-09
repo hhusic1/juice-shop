@@ -1,4 +1,4 @@
-﻿name: DevSecOps Pipeline — OWASP Juice Shop
+name: DevSecOps Pipeline - OWASP Juice Shop
 
 on:
   push:
@@ -22,8 +22,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ── 1. TRUFFLEHOG ──────────────────────────────────────────
-      - name: "TruffleHog — Secret Scanning"
+      # 1. TRUFFLEHOG
+      - name: "TruffleHog - Secret Scanning"
         run: |
           docker run --rm \
             -v "${{ github.workspace }}:/repo" \
@@ -43,8 +43,8 @@ jobs:
           name: trufflehog-report
           path: trufflehog-report.json
 
-      # ── 2. SEMGREP ─────────────────────────────────────────────
-      - name: "Semgrep — SAST analiza"
+      # 2. SEMGREP
+      - name: "Semgrep - SAST analiza"
         run: |
           pip install semgrep --quiet
           semgrep --config=p/owasp-top-ten \
@@ -53,7 +53,7 @@ jobs:
                   --json \
                   --output semgrep-report.json \
                   . || true
-          echo "Semgrep završen."
+          echo "Semgrep zavrsen."
 
       - name: Upload Semgrep rezultati
         uses: actions/upload-artifact@v4
@@ -62,12 +62,14 @@ jobs:
           name: semgrep-report
           path: semgrep-report.json
 
-      # ── 3. OWASP DEPENDENCY-CHECK ──────────────────────────────
-      - name: "OWASP Dependency-Check — SCA"
+      # 3. OWASP DEPENDENCY-CHECK
+      - name: "OWASP Dependency-Check - SCA"
         run: |
           mkdir -p reports
+          chmod 777 reports
           docker run --rm \
-            -v "${{ github.workspace }}:/src" \
+            --user root \
+            -v "${{ github.workspace }}:/src:ro" \
             -v "${{ github.workspace }}/reports:/report" \
             owasp/dependency-check:latest \
             --project "juice-shop" \
@@ -85,12 +87,12 @@ jobs:
           name: dependency-check-report
           path: reports/
 
-      # ── 4. DOCKER BUILD ────────────────────────────────────────
-      - name: "Docker — build image"
+      # 4. DOCKER BUILD
+      - name: "Docker - build image"
         run: docker build -t juice-shop:latest .
 
-      # ── 5. TRIVY ───────────────────────────────────────────────
-      - name: "Trivy — skeniranje Docker image-a"
+      # 5. TRIVY
+      - name: "Trivy - skeniranje Docker image-a"
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: "juice-shop:latest"
@@ -106,7 +108,7 @@ jobs:
           name: trivy-report
           path: trivy-report.txt
 
-      # ── 6. DOCKER RUN ──────────────────────────────────────────
+      # 6. DOCKER RUN
       - name: "Pokreni Juice Shop kontejner"
         run: |
           docker run -d \
@@ -119,12 +121,14 @@ jobs:
             http://localhost:3000 -o /dev/null -s \
             -w "HTTP status: %{http_code}\n"
 
-      # ── 7. OWASP ZAP ───────────────────────────────────────────
-      - name: "OWASP ZAP — DAST Baseline Scan"
+      # 7. OWASP ZAP
+      - name: "OWASP ZAP - DAST Baseline Scan"
         run: |
+          mkdir -p zap-output
+          chmod 777 zap-output
           docker run --rm \
             --network host \
-            -v "${{ github.workspace }}:/zap/wrk" \
+            -v "${{ github.workspace }}/zap-output:/zap/wrk" \
             ghcr.io/zaproxy/zaproxy:stable \
             zap-baseline.py \
             -t http://localhost:3000 \
@@ -138,10 +142,10 @@ jobs:
         with:
           name: zap-report
           path: |
-            zap-report.html
-            zap-report.json
+            zap-output/zap-report.html
+            zap-output/zap-report.json
 
-      # ── 8. CLEANUP ─────────────────────────────────────────────
+      # 8. CLEANUP
       - name: Zaustavi kontejner
         if: always()
         run: docker stop juice-shop && docker rm juice-shop || true
